@@ -59,6 +59,8 @@ class RabbitMQWorkQueue(WorkQueue, WorkPublisher):
         self._lock = asyncio.Lock()
         self._publish_slots = asyncio.Semaphore(config.max_in_flight_publishes)
         self._closed = False
+        self._close_task: asyncio.Task[None] | None = None
+        self._closing_connection: Any | None = None
 
     async def publish(self, message: WorkMessage) -> None:
         """Publish one persistent message and wait until RabbitMQ confirms it."""
@@ -111,24 +113,50 @@ class RabbitMQWorkQueue(WorkQueue, WorkPublisher):
         await self._ensure_publisher()
 
     async def aclose(self) -> None:
-        """Stop broker delivery and close all owned channels and the robust connection."""
+        """Stop broker delivery and finish closing the owned robust connection.
+
+        Connection cleanup runs in a retained task so cancellation of one shutdown
+        caller cannot cancel the broker close operation. A later call waits for that
+        same cleanup task. The adapter becomes unavailable before closing begins.
+        """
         async with self._lock:
-            if self._closed:
-                return
-            self._closed = True
-            connection = self._connection
-            self._connection = None
-            self._publisher = None
-            self._consumer_channel = None
-            self._queue = None
-            self._consumer_tag = None
-        if connection is not None:
+            if not self._closed:
+                self._closed = True
+                connection = self._connection
+                self._connection = None
+                self._publisher = None
+                self._consumer_channel = None
+                self._queue = None
+                self._consumer_tag = None
+                self._closing_connection = connection
+            close_task = self._close_task
+            previous_close_failed = (
+                close_task is not None
+                and close_task.done()
+                and (close_task.cancelled() or close_task.exception() is not None)
+            )
+            if self._closing_connection is not None and (
+                close_task is None or previous_close_failed
+            ):
+                self._close_task = asyncio.create_task(
+                    self._close_connection(self._closing_connection)
+                )
+                self._close_task.add_done_callback(_observe_close_task)
+            close_task = self._close_task
+        if close_task is not None:
             try:
-                await connection.close()
+                await asyncio.shield(close_task)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 raise RabbitMQWorkQueueError("close") from None
+
+    async def _close_connection(self, connection: Any) -> None:
+        """Close the detached broker connection and release it after successful cleanup."""
+        await connection.close()
+        async with self._lock:
+            if self._closing_connection is connection:
+                self._closing_connection = None
 
     async def __aenter__(self) -> RabbitMQWorkQueue:
         """Return this queue for async context-managed resource ownership."""
@@ -326,19 +354,24 @@ class RabbitMQWorkDelivery(WorkDelivery):
 
     @property
     def message(self) -> WorkMessage:
+        """Return the immutable message represented by this broker delivery."""
         return self._message
 
     @property
     def attempt(self) -> int:
+        """Return the broker delivery attempt count used for retry limits."""
         return self._attempt
 
     async def ack(self) -> None:
+        """Acknowledge successful handling exactly once for this delivery."""
         await self._settle("ack")
 
     async def reject(self) -> None:
+        """Reject the delivery without requeueing it to the original queue."""
         await self._settle("reject")
 
     async def retry(self, delay: float) -> None:
+        """Republish for delayed retry and settle the original delivery."""
         async with self._settlement_lock:
             if self._settled:
                 raise RabbitMQWorkQueueError("settle")
@@ -362,3 +395,10 @@ class RabbitMQWorkDelivery(WorkDelivery):
 
 
 __all__ = ["RabbitMQWorkDelivery", "RabbitMQWorkQueue", "RabbitMQWorkQueueError"]
+
+
+def _observe_close_task(task: asyncio.Task[None]) -> None:
+    """Retrieve background close failures if every caller was cancelled."""
+    if not task.cancelled():
+        with suppress(Exception):
+            task.exception()

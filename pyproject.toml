@@ -11,7 +11,7 @@ requires-python = ">=3.11,<3.15"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = ["aio-pika>=9,<10", "orbit-workers>=0.1.0a1,<0.2", "pydantic>=2.9,<3"]
-classifiers = ["Development Status :: 2 - Pre-Alpha", "Programming Language :: Python :: 3", "Typing :: Typed"]
+classifiers = ["Development Status :: 3 - Alpha", "Programming Language :: Python :: 3", "Typing :: Typed"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.8,<1", "mypy>=1.13,<2"]

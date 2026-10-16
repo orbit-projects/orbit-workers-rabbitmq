@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 from typing import Any
+
+import pytest
 
 
 class _Message:
@@ -22,7 +25,11 @@ sys.modules["aio_pika"] = _aio_pika
 
 from orbit_workers import WorkMessage  # noqa: E402
 
-from orbit_workers_rabbitmq import RabbitMQWorkQueue, RabbitMQWorkQueueConfig  # noqa: E402
+from orbit_workers_rabbitmq import (  # noqa: E402
+    RabbitMQWorkQueue,
+    RabbitMQWorkQueueConfig,
+    RabbitMQWorkQueueError,
+)
 
 
 class _Exchange:
@@ -84,6 +91,7 @@ class _Connection:
     def __init__(self) -> None:
         self.channels: list[_Channel] = []
         self.closed = False
+        self.close_attempts = 0
 
     async def channel(self, **kwargs: Any) -> _Channel:
         channel = _Channel()
@@ -91,6 +99,7 @@ class _Connection:
         return channel
 
     async def close(self) -> None:
+        self.close_attempts += 1
         self.closed = True
 
 
@@ -124,6 +133,52 @@ async def test_publish_uses_persistent_message_and_waits_for_mandatory_confirm(
     assert mandatory is True
     assert publisher.declarations[0][1] is True
     await queue.aclose()
+    assert connection.closed is True
+
+
+async def test_close_finishes_if_first_shutdown_caller_is_cancelled(monkeypatch: Any) -> None:
+    """Repeated shutdown can await the same close operation after caller cancellation."""
+    connection = await _install_connection(monkeypatch)
+    queue = RabbitMQWorkQueue(_config())
+    await queue.startup()
+    closing = asyncio.Event()
+    finish_close = asyncio.Event()
+
+    async def delayed_close() -> None:
+        closing.set()
+        await finish_close.wait()
+        connection.closed = True
+
+    monkeypatch.setattr(connection, "close", delayed_close)
+    first_caller = asyncio.create_task(queue.aclose())
+    await closing.wait()
+    first_caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_caller
+
+    assert connection.closed is False
+    finish_close.set()
+    await queue.aclose()
+    assert connection.closed is True
+
+
+async def test_failed_connection_close_can_be_retried(monkeypatch: Any) -> None:
+    connection = await _install_connection(monkeypatch)
+    queue = RabbitMQWorkQueue(_config())
+    await queue.startup()
+
+    async def close_once_with_failure() -> None:
+        connection.close_attempts += 1
+        if connection.close_attempts == 1:
+            raise RuntimeError("temporary broker close failure")
+        connection.closed = True
+
+    monkeypatch.setattr(connection, "close", close_once_with_failure)
+    with pytest.raises(RabbitMQWorkQueueError, match="close"):
+        await queue.aclose()
+    await queue.aclose()
+
+    assert connection.close_attempts == 2
     assert connection.closed is True
 
 
@@ -189,3 +244,19 @@ class _Incoming:
     async def reject(self, *, requeue: bool = False) -> None:
         self.rejected = True
         self.requeue = requeue
+
+
+async def test_plugin_control_action_reviews_safe_queue_settings() -> None:
+    """The UI can review queue limits without connecting or revealing the broker URL."""
+    from orbit_workers_rabbitmq.plugin import RabbitMQWorkQueuePlugin
+
+    secret_url = "amqps://operator:private-secret@broker.example/vhost"
+    queue = RabbitMQWorkQueue(RabbitMQWorkQueueConfig(url=secret_url, queue="orders.work"))
+    plugin = RabbitMQWorkQueuePlugin(queue)
+
+    result = await plugin.control_actions[0].handler({})
+
+    assert result is not None
+    assert result.summary == "RabbitMQ worker queue settings are configured."
+    assert "queue: orders.work" in result.details
+    assert all("private-secret" not in detail for detail in result.details)

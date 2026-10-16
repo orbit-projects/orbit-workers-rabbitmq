@@ -15,6 +15,14 @@ duplicate provider deliveries. The consumer uses manual acknowledgments. Handler
 ack; retry republishes a persistent message with an incremented attempt before acking the prior
 delivery. Terminal rejects route to the dead-letter queue. Delivery is at least once.
 
+Register `RabbitMQWorkQueuePlugin` when Orbit Core owns the adapter lifecycle. Startup connects and
+declares the topology before the application reports ready; shutdown marks the adapter unavailable
+and closes its robust connection. If the shutdown caller is cancelled, connection cleanup continues
+in a retained task and a later `aclose()` call waits for it. If close fails, a later call retries
+the retained connection cleanup. A process-level forced termination can still interrupt cleanup,
+so deployments should allow a graceful shutdown window longer than the broker connection close
+time.
+
 The source quorum queue configures at-least-once dead-letter transfer and `reject-publish` overflow.
 This requires sufficient broker storage and a healthy dead-letter target; monitor both queues and
 their nodes so backpressure is visible. Three quorum members across independent nodes is the

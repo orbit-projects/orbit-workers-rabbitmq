@@ -12,5 +12,10 @@ returns successfully. Rejects route to a durable dead-letter queue. This is at-l
 not exactly-once processing. Configure initial quorum group size to match the available RabbitMQ
 cluster; three members is the practical minimum for tolerating one node failure.
 
+The adapter bounds locally buffered deliveries with the same configured count used for broker
+prefetch. Its Core plugin connects during activation and closes the adapter during deactivation.
+Connection shutdown is retained across caller cancellation so application lifecycle code can retry
+waiting for cleanup without reopening the broker connection.
+
 The adapter's queue is for work delivery. `orbit-events-rabbitmq` is a separate event transport and
 does not implement the `WorkQueue` contract. Core itself does not include either transport.
