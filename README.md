@@ -42,6 +42,9 @@ async def process(message: WorkMessage) -> None:
 await QueueWorker(queue, process, workers=8, retry_policy=RetryPolicy(max_attempts=8)).run()
 ```
 
+The optional Core plugin adds **Review worker queue settings** to Orbit CLI. It shows bounded
+topology and delivery limits without connecting to RabbitMQ or revealing the broker URL.
+
 The application that accepts provider webhooks can publish with this same adapter. A `2xx` response
 is safe only after `publish()` returns, which means RabbitMQ confirmed the persistent message. If
 publication fails or is ambiguous, return a retryable HTTP failure; provider retries can produce a
@@ -53,4 +56,4 @@ tested failover. The dead-letter queue is durable but requires an operational re
 policy. See [architecture](docs/architecture/overview.md), [operations](docs/operations/README.md),
 [security](docs/security/overview.md), and [development](docs/development/README.md).
 
-This package is pre-alpha. It supports Python 3.11–3.14 and is licensed under Apache-2.0.
+This package is alpha. It supports Python 3.11–3.14 and is licensed under Apache-2.0.

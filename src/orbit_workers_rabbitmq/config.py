@@ -43,6 +43,7 @@ class RabbitMQWorkQueueConfig(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_url(cls, value: SecretStr) -> SecretStr:
+        """Require a bounded printable AMQP URL and retain it as a masked secret."""
         url = value.get_secret_value()
         if (
             not 1 <= len(url) <= 4_096
@@ -55,6 +56,7 @@ class RabbitMQWorkQueueConfig(BaseModel):
     @field_validator("queue", "dead_letter_exchange")
     @classmethod
     def validate_name(cls, value: str) -> str:
+        """Restrict broker topology names to portable bounded ASCII characters."""
         if _NAME.fullmatch(value) is None:
             raise ValueError("RabbitMQ names must use portable ASCII identifier characters.")
         return value

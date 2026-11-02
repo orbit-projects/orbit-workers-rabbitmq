@@ -16,3 +16,6 @@ Use deterministic fake AMQP surfaces for unit tests. A separately opted-in integ
 exercise a disposable RabbitMQ service, including confirms, restart/redelivery, dead-letter routing,
 retry ambiguity, and concurrent shutdown. Never point destructive tests at a shared or production
 broker.
+The local quality matrix passed **4 tests on each of CPython 3.11.14, 3.12.14, 3.13.15, and
+3.14.7**, along with Ruff lint and formatting, strict mypy, and wheel/source builds. This is
+deterministic adapter coverage, not a live RabbitMQ delivery or recovery check.

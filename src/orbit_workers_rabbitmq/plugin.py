@@ -13,8 +13,10 @@
 # limitations under the License.
 """Optional Core lifecycle integration for the standalone RabbitMQ work adapter."""
 
+from collections.abc import Mapping
+
 from orbit import Application
-from orbit.plugins import Plugin, PluginMetadata
+from orbit.plugins import ControlAction, ControlResult, Plugin, PluginMetadata
 from orbit_workers import WORK_QUEUE_DEPENDENCY_KEY
 
 from orbit_workers_rabbitmq.queue import RabbitMQWorkQueue
@@ -35,8 +37,17 @@ class RabbitMQWorkQueuePlugin(Plugin):
         if not isinstance(queue, RabbitMQWorkQueue):
             raise TypeError("queue must be a RabbitMQWorkQueue instance.")
         self.queue = queue
+        self.control_actions = (
+            ControlAction(
+                id="review-queue-settings",
+                title="Review worker queue settings",
+                description="Inspect safe queue limits and topology without contacting RabbitMQ.",
+                handler=self._review_queue_settings,
+            ),
+        )
 
     def setup(self, application: Application) -> None:
+        """Register the adapter under the worker queue and publisher contracts."""
         if not isinstance(application, Application):
             raise TypeError("RabbitMQWorkQueuePlugin requires an Orbit Application.")
         application.container.register_instance(WORK_QUEUE_DEPENDENCY_KEY, self.queue)
@@ -47,7 +58,23 @@ class RabbitMQWorkQueuePlugin(Plugin):
         await self.queue.startup()
 
     async def deactivate(self) -> None:
+        """Close queue and broker resources owned by this plugin."""
         await self.queue.aclose()
+
+    async def _review_queue_settings(self, _: Mapping[str, object]) -> ControlResult:
+        """Display bounded queue settings while never revealing the broker URL."""
+        config = self.queue.config
+        return ControlResult(
+            "RabbitMQ worker queue settings are configured.",
+            (
+                f"queue: {config.queue}",
+                f"dead_letter_exchange: {config.dead_letter_exchange}",
+                f"prefetch_count: {config.prefetch_count}",
+                f"max_in_flight_publishes: {config.max_in_flight_publishes}",
+                f"max_message_bytes: {config.max_message_bytes}",
+                f"max_broker_redeliveries: {config.max_broker_redeliveries}",
+            ),
+        )
 
 
 __all__ = ["RabbitMQWorkQueuePlugin", "WORK_PUBLISHER_DEPENDENCY_KEY"]
